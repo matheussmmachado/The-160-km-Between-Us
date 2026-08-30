@@ -1,0 +1,1882 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Matheus & Larissa — A Jornada</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: #000;
+      overflow: hidden;
+      height: 100%;
+      font-family: 'Press Start 2P', monospace;
+    }
+    #game-container {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 100%;
+      height: 100vh;
+    }
+    #dom-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      z-index: 10;
+    }
+    #dom-overlay.active {
+      pointer-events: auto;
+    }
+    .rpg-input-box {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: #10186b;
+      border: 4px solid #ffffff;
+      box-shadow: inset 0 0 0 2px #10186b, inset 0 0 0 4px #6a7fdb;
+      padding: 24px;
+      color: #fff;
+      font-family: 'Press Start 2P', monospace;
+      font-size: 14px;
+      text-align: center;
+      min-width: 320px;
+    }
+    .rpg-input-box input {
+      margin-top: 16px;
+      width: 90%;
+      background: #000;
+      border: 2px solid #fff;
+      color: #7CFC7C;
+      font-family: 'Press Start 2P', monospace;
+      font-size: 14px;
+      padding: 8px;
+      text-align: center;
+    }
+    .rpg-input-box .error-msg {
+      color: #ff6b6b;
+      font-size: 10px;
+      margin-top: 10px;
+      min-height: 14px;
+    }
+    .rpg-input-box button {
+      margin-top: 16px;
+      font-family: 'Press Start 2P', monospace;
+      font-size: 12px;
+      background: #ffffff;
+      border: 2px solid #10186b;
+      padding: 8px 16px;
+      cursor: pointer;
+    }
+    .rpg-input-box button:hover {
+      background: #ffe066;
+    }
+  </style>
+</head>
+<body>
+  <div id="game-container"></div>
+  <div id="dom-overlay"></div>
+
+  <!-- Phaser via CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/phaser@3.70.0/dist/phaser.min.js"></script>
+
+  <!-- ============================================================ -->
+  <!-- TODO O CÓDIGO DO JOGO EM UM ÚNICO ARQUIVO — veja o comentário -->
+  <!-- de cabeçalho de cada seção abaixo para saber "quem é quem".  -->
+  <!-- ============================================================ -->
+  <script type="module">
+// ==================== firebase/firebaseConfig.js ====================
+// ============================================================================
+// firebaseConfig.js
+// Configuração e inicialização do Firebase (Firestore) para o jogo.
+//
+// >>> SUBSTITUA os valores abaixo pelas credenciais do SEU projeto Firebase. <<<
+// Você encontra esses valores em: Firebase Console > Configurações do Projeto
+// > Geral > "Seus apps" > SDK do Firebase (Config).
+// ============================================================================
+
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import {
+  getFirestore,
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  setDoc,
+  updateDoc,
+} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+// PLACEHOLDER — troque pelos dados reais do seu projeto Firebase.
+const firebaseConfig = {
+  apiKey: "SUA_API_KEY_AQUI",
+  authDomain: "SEU_PROJETO.firebaseapp.com",
+  projectId: "SEU_PROJETO_ID",
+  storageBucket: "SEU_PROJETO.appspot.com",
+  messagingSenderId: "SEU_SENDER_ID",
+  appId: "SEU_APP_ID",
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+
+// Nome da coleção onde cada documento = uma partida salva (chave = nickname).
+const SAVES_COLLECTION = "saves";
+
+
+// ==================== utils/SaveManager.js ====================
+// ============================================================================
+// SaveManager.js
+// Responsável por toda a comunicação com o Firebase para o sistema de
+// NEW GAME / LOAD GAME (criação, consulta, autenticação e atualização de saves).
+// ============================================================================
+
+
+
+// Gera um hash SHA-256 da senha (nunca guardamos a senha em texto puro).
+async function hashPassword(rawPassword) {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(rawPassword);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+class SaveManager {
+  /**
+   * Cria uma nova partida no Firebase.
+   * @param {Object} params
+   * @param {"matheus"|"larissa"} params.character
+   * @param {string} params.nickname - deve começar com "@"
+   * @param {string} params.password
+   */
+  static async createNewGame({ character, nickname, password }) {
+    if (!nickname.startsWith("@")) {
+      throw new Error("O Nickname deve começar com @.");
+    }
+
+    const saveRef = doc(collection(db, SAVES_COLLECTION), nickname);
+    const existing = await getDoc(saveRef);
+    if (existing.exists()) {
+      throw new Error("Esse Nickname já está em uso. Escolha outro.");
+    }
+
+    const passwordHash = await hashPassword(password);
+
+    // Posição inicial depende do personagem escolhido (ver seção 11 e 17 do prompt).
+    const startPosition =
+      character === "matheus"
+        ? { map: "perus_sp", x: 5, y: 5 }
+        : { map: "pouso_alegre_mg", x: 5, y: 5 };
+
+    const saveData = {
+      nickname,
+      character,
+      passwordHash,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      progress: {
+        // Estrutura mínima de progresso — será expandida conforme novos
+        // sistemas (economia, atributos, inventário, quests) forem definidos.
+        currentMap: startPosition.map,
+        position: { x: startPosition.x, y: startPosition.y },
+        money: 0,
+        hunger: 100,
+        flags: {}, // eventos/condicionais concluídos
+        inventory: [],
+      },
+    };
+
+    await setDoc(saveRef, saveData);
+    return saveData;
+  }
+
+  /** Retorna a lista de nicknames existentes (para a tela LOAD GAME). */
+  static async listSaves() {
+    const snapshot = await getDocs(collection(db, SAVES_COLLECTION));
+    return snapshot.docs.map((d) => d.id);
+  }
+
+  /** Valida a senha de um nickname e retorna os dados do save se correta. */
+  static async authenticate(nickname, password) {
+    const saveRef = doc(collection(db, SAVES_COLLECTION), nickname);
+    const snapshot = await getDoc(saveRef);
+    if (!snapshot.exists()) {
+      throw new Error("Nickname não encontrado.");
+    }
+
+    const data = snapshot.data();
+    const passwordHash = await hashPassword(password);
+    if (passwordHash !== data.passwordHash) {
+      throw new Error("Senha incorreta.");
+    }
+
+    return data;
+  }
+
+  /** Atualiza o progresso salvo (chamado periodicamente / em pontos-chave). */
+  static async updateProgress(nickname, progressPatch) {
+    const saveRef = doc(collection(db, SAVES_COLLECTION), nickname);
+    await updateDoc(saveRef, {
+      progress: progressPatch,
+      updatedAt: Date.now(),
+    });
+  }
+}
+
+
+// ==================== ui/domPrompt.js ====================
+// ============================================================================
+// domPrompt.js
+// Helper para pedir texto ao jogador (nickname, senha) usando um overlay DOM
+// estilizado como janela de RPG, por cima do canvas do Phaser. Usar DOM aqui
+// é mais simples e acessível do que reimplementar um teclado virtual no
+// Phaser, e mantém a fidelidade visual via CSS (ver index.html).
+// ============================================================================
+
+const overlay = document.getElementById("dom-overlay");
+
+/**
+ * @param {Object} opts
+ * @param {string} opts.title
+ * @param {string} [opts.placeholder]
+ * @param {"text"|"password"} [opts.type]
+ * @param {(value:string)=>string|null} [opts.validate] - retorna mensagem de erro ou null se válido
+ * @returns {Promise<string>}
+ */
+function domPrompt({ title, placeholder = "", type = "text", validate }) {
+  return new Promise((resolve) => {
+    overlay.classList.add("active");
+    overlay.innerHTML = `
+      <div class="rpg-input-box">
+        <div>${title}</div>
+        <input type="${type}" placeholder="${placeholder}" autocomplete="off" />
+        <div class="error-msg"></div>
+        <button type="button">CONFIRMAR</button>
+      </div>
+    `;
+
+    const input = overlay.querySelector("input");
+    const button = overlay.querySelector("button");
+    const errorMsg = overlay.querySelector(".error-msg");
+    input.focus();
+
+    const submit = () => {
+      const value = input.value.trim();
+      const error = validate ? validate(value) : null;
+      if (error) {
+        errorMsg.textContent = error;
+        return;
+      }
+      overlay.classList.remove("active");
+      overlay.innerHTML = "";
+      resolve(value);
+    };
+
+    button.addEventListener("click", submit);
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") submit();
+    });
+  });
+}
+
+
+// ==================== ui/MenuWindow.js ====================
+// ============================================================================
+// MenuWindow.js
+// Janela de menu reutilizável no estilo Pokémon Essentials / RPG Maker XP:
+// fundo azul-escuro, borda branca nítida, opções navegáveis com seta/cursor.
+// ============================================================================
+
+const PALETTE = {
+  windowFill: 0x10186b,
+  windowFillInner: 0x1c2694,
+  border: 0xffffff,
+  text: "#ffffff",
+  textSelected: "#ffe066",
+};
+
+class MenuWindow {
+  /**
+   * @param {Phaser.Scene} scene
+   * @param {Object} opts
+   * @param {number} opts.x
+   * @param {number} opts.y
+   * @param {number} opts.width
+   * @param {number} opts.height
+   * @param {string[]} opts.options - rótulos das opções
+   * @param {(index:number, label:string)=>void} opts.onSelect
+   */
+  constructor(scene, { x, y, width, height, options, onSelect }) {
+    this.scene = scene;
+    this.options = options;
+    this.onSelect = onSelect;
+    this.selectedIndex = 0;
+
+    this.container = scene.add.container(x, y);
+
+    // Moldura da janela (dupla borda, estilo GBA)
+    const g = scene.add.graphics();
+    g.fillStyle(PALETTE.windowFill, 1);
+    g.fillRect(0, 0, width, height);
+    g.lineStyle(4, PALETTE.border, 1);
+    g.strokeRect(2, 2, width - 4, height - 4);
+    g.lineStyle(2, PALETTE.windowFillInner, 1);
+    g.strokeRect(8, 8, width - 16, height - 16);
+    this.container.add(g);
+
+    // Cursor (triângulo/seta) indicando a opção selecionada
+    this.cursor = scene.add.triangle(24, 0, 0, -6, 0, 6, 10, 0, 0xffe066);
+    this.container.add(this.cursor);
+
+    // Textos das opções
+    this.textObjects = options.map((label, i) => {
+      const t = scene.add.text(40, 0, label, {
+        fontFamily: "monospace",
+        fontSize: "18px",
+        color: PALETTE.text,
+      });
+      t.setOrigin(0, 0.5);
+      this.container.add(t);
+      return t;
+    });
+
+    this._layout(width, height);
+    this._setupInput();
+    this._updateSelectionVisual();
+  }
+
+  _layout(width, height) {
+    const padding = 28;
+    const step = (height - padding * 2) / Math.max(this.options.length - 1, 1);
+    this.textObjects.forEach((t, i) => {
+      const yPos =
+        this.options.length === 1
+          ? height / 2
+          : padding + i * step;
+      t.setY(yPos);
+    });
+  }
+
+  _setupInput() {
+    this.keys = this.scene.input.keyboard.addKeys({
+      up: Phaser.Input.Keyboard.KeyCodes.UP,
+      down: Phaser.Input.Keyboard.KeyCodes.DOWN,
+      w: Phaser.Input.Keyboard.KeyCodes.W,
+      s: Phaser.Input.Keyboard.KeyCodes.S,
+      enter: Phaser.Input.Keyboard.KeyCodes.ENTER,
+      space: Phaser.Input.Keyboard.KeyCodes.SPACE,
+    });
+
+    this.textObjects.forEach((t, i) => {
+      t.setInteractive({ useHandCursor: true });
+      t.on("pointerover", () => {
+        this.selectedIndex = i;
+        this._updateSelectionVisual();
+      });
+      t.on("pointerdown", () => this._confirm());
+    });
+  }
+
+  update() {
+    if (Phaser.Input.Keyboard.JustDown(this.keys.up) || Phaser.Input.Keyboard.JustDown(this.keys.w)) {
+      this.selectedIndex =
+        (this.selectedIndex - 1 + this.options.length) % this.options.length;
+      this._updateSelectionVisual();
+    }
+    if (Phaser.Input.Keyboard.JustDown(this.keys.down) || Phaser.Input.Keyboard.JustDown(this.keys.s)) {
+      this.selectedIndex = (this.selectedIndex + 1) % this.options.length;
+      this._updateSelectionVisual();
+    }
+    if (Phaser.Input.Keyboard.JustDown(this.keys.enter) || Phaser.Input.Keyboard.JustDown(this.keys.space)) {
+      this._confirm();
+    }
+  }
+
+  _confirm() {
+    if (this.onSelect) {
+      this.onSelect(this.selectedIndex, this.options[this.selectedIndex]);
+    }
+  }
+
+  _updateSelectionVisual() {
+    this.textObjects.forEach((t, i) => {
+      t.setColor(i === this.selectedIndex ? PALETTE.textSelected : PALETTE.text);
+    });
+    const selectedText = this.textObjects[this.selectedIndex];
+    this.cursor.setY(selectedText.y);
+  }
+
+  destroy() {
+    this.container.destroy();
+  }
+}
+
+
+// ==================== ui/DialogBox.js ====================
+// ============================================================================
+// DialogBox.js
+// Caixa de diálogo clássica de RPG (fundo azul-escuro, borda branca, texto
+// com efeito de "digitação" letra por letra). Usada para NPCs, eventos e
+// para a mensagem de vitória dos mini-games de senha.
+// ============================================================================
+
+class DialogBox {
+  constructor(scene) {
+    this.scene = scene;
+    const width = scene.scale.width - 64;
+    const height = 140;
+    const x = 32;
+    const y = scene.scale.height - height - 24;
+
+    this.container = scene.add.container(x, y).setDepth(1000).setVisible(false);
+
+    const g = scene.add.graphics();
+    g.fillStyle(0x10186b, 0.95);
+    g.fillRect(0, 0, width, height);
+    g.lineStyle(4, 0xffffff, 1);
+    g.strokeRect(2, 2, width - 4, height - 4);
+    this.container.add(g);
+
+    this.text = scene.add.text(20, 20, "", {
+      fontFamily: "monospace",
+      fontSize: "16px",
+      color: "#ffffff",
+      wordWrap: { width: width - 40 },
+    });
+    this.container.add(this.text);
+
+    this.prompt = scene.add.text(width - 90, height - 28, "▼ ENTER", {
+      fontFamily: "monospace",
+      fontSize: "12px",
+      color: "#ffe066",
+    });
+    this.container.add(this.prompt);
+    this.prompt.setVisible(false);
+
+    this._fullMessage = "";
+    this._charIndex = 0;
+    this._typing = false;
+  }
+
+  /** Exibe uma mensagem com efeito de digitação. Retorna uma Promise resolvida quando o jogador confirma. */
+  show(message) {
+    return new Promise((resolve) => {
+      this.container.setVisible(true);
+      this._fullMessage = message;
+      this._charIndex = 0;
+      this.text.setText("");
+      this.prompt.setVisible(false);
+      this._typing = true;
+
+      this._timer = this.scene.time.addEvent({
+        delay: 25,
+        loop: true,
+        callback: () => {
+          this._charIndex++;
+          this.text.setText(this._fullMessage.substring(0, this._charIndex));
+          if (this._charIndex >= this._fullMessage.length) {
+            this._timer.remove();
+            this._typing = false;
+            this.prompt.setVisible(true);
+          }
+        },
+      });
+
+      const confirmKey = this.scene.input.keyboard.addKey(
+        Phaser.Input.Keyboard.KeyCodes.ENTER
+      );
+      const onConfirm = () => {
+        if (this._typing) {
+          // Pula direto para o final do texto
+          this._timer.remove();
+          this.text.setText(this._fullMessage);
+          this._typing = false;
+          this.prompt.setVisible(true);
+          return;
+        }
+        confirmKey.off("down", onConfirm);
+        this.container.setVisible(false);
+        resolve();
+      };
+      confirmKey.on("down", onConfirm);
+    });
+  }
+}
+
+
+// ==================== ui/VictoryEffect.js ====================
+// ============================================================================
+// VictoryEffect.js
+// Efeito de fogos de artifício em pixel art (partículas quadradas subindo e
+// explodindo em cores vibrantes) + caixa de diálogo de parabéns.
+// Disparado ao vencer qualquer um dos 3 mini-games de senha.
+// ============================================================================
+
+
+
+const FIREWORK_COLORS = [0xff5252, 0xffe066, 0x69f0ae, 0x40c4ff, 0xe040fb];
+
+class VictoryEffect {
+  constructor(scene) {
+    this.scene = scene;
+  }
+
+  /** Dispara fogos de artifício por alguns segundos e mostra a mensagem de parabéns. */
+  async play(customMessage) {
+    const { width, height } = this.scene.scale;
+
+    // Lança de 4 a 6 "fogos" em sequência
+    const bursts = Phaser.Math.Between(4, 6);
+    for (let i = 0; i < bursts; i++) {
+      this.scene.time.delayedCall(i * 350, () => this._launchOne(width, height));
+    }
+
+    await new Promise((resolve) =>
+      this.scene.time.delayedCall(bursts * 350 + 600, resolve)
+    );
+
+    const dialog = new DialogBox(this.scene);
+    await dialog.show(
+      customMessage || "Parabéns, aventureiro! Você conquistou este desafio!"
+    );
+  }
+
+  _launchOne(width, height) {
+    const startX = Phaser.Math.Between(80, width - 80);
+    const targetY = Phaser.Math.Between(80, height * 0.4);
+    const color = Phaser.Utils.Array.GetRandom(FIREWORK_COLORS);
+
+    // "Foguete" subindo (retângulo pixelado)
+    const rocket = this.scene.add.rectangle(startX, height, 4, 12, 0xffffff);
+
+    this.scene.tweens.add({
+      targets: rocket,
+      y: targetY,
+      duration: 500,
+      ease: "Cubic.easeOut",
+      onComplete: () => {
+        rocket.destroy();
+        this._explode(startX, targetY, color);
+      },
+    });
+  }
+
+  _explode(x, y, color) {
+    const particleCount = 16;
+    for (let i = 0; i < particleCount; i++) {
+      const angle = (Math.PI * 2 * i) / particleCount;
+      const distance = Phaser.Math.Between(40, 90);
+      const particle = this.scene.add.rectangle(x, y, 5, 5, color);
+
+      this.scene.tweens.add({
+        targets: particle,
+        x: x + Math.cos(angle) * distance,
+        y: y + Math.sin(angle) * distance,
+        alpha: 0,
+        duration: 700,
+        ease: "Cubic.easeOut",
+        onComplete: () => particle.destroy(),
+      });
+    }
+  }
+}
+
+
+// ==================== scenes/BootScene.js ====================
+// ============================================================================
+// BootScene.js
+// Primeira cena executada. Prepara texturas placeholder (enquanto os
+// spritesheets/tilesets finais em pixel art não são fornecidos) e segue
+// para a tela de título.
+// ============================================================================
+
+class BootScene extends Phaser.Scene {
+  constructor() {
+    super("BootScene");
+  }
+
+  preload() {
+    // TODO: quando os assets finais (tilesets, spritesheets GBA-style) forem
+    // fornecidos, substituir os placeholders abaixo por this.load.spritesheet(...)
+    // e this.load.image(...) apontando para /assets/tiles e /assets/sprites.
+  }
+
+  create() {
+    this._generatePlaceholderTextures();
+    this.scene.start("TitleScene");
+  }
+
+  // Gera texturas coloridas simples via Graphics para não depender de
+  // arquivos de imagem ainda não fornecidos. Cada uma representa um tipo de
+  // tile ou personagem, respeitando a paleta descrita no prompt (verdes,
+  // caminhos amarelados, água com borda azulada).
+  _generatePlaceholderTextures() {
+    const tiles = {
+      grass: 0x4caf50,
+      grass_dark: 0x3f9142,
+      path: 0xd8b06a,
+      water: 0x3aa0e8,
+      water_edge: 0x2b5fa0,
+      tree: 0x1b5e20,
+      bush: 0x2e7d32,
+      flower_pink: 0xff8fd0,
+    };
+
+    Object.entries(tiles).forEach(([key, color]) => {
+      const g = this.make.graphics({ x: 0, y: 0, add: false });
+      g.fillStyle(color, 1);
+      g.fillRect(0, 0, 32, 32);
+      g.generateTexture(`tile_${key}`, 32, 32);
+      g.destroy();
+    });
+
+    const characters = {
+      matheus: 0x2979ff,
+      larissa: 0xf06292,
+    };
+
+    Object.entries(characters).forEach(([key, color]) => {
+      const g = this.make.graphics({ x: 0, y: 0, add: false });
+      g.fillStyle(color, 1);
+      g.fillRect(6, 0, 20, 32);
+      g.fillStyle(0xffe0b2, 1);
+      g.fillRect(10, 0, 12, 12);
+      g.generateTexture(`char_${key}`, 32, 32);
+      g.destroy();
+    });
+  }
+}
+
+
+// ==================== scenes/TitleScene.js ====================
+// ============================================================================
+// TitleScene.js
+// Tela inicial do jogo — exatamente 3 opções: NEW GAME, LOAD GAME, PASSWORD
+// (ver seção 5 do prompt). Estilo visual: janela pixel art GBA.
+// ============================================================================
+
+
+
+class TitleScene extends Phaser.Scene {
+  constructor() {
+    super("TitleScene");
+  }
+
+  create() {
+    const { width, height } = this.scale;
+
+    this.add
+      .rectangle(0, 0, width, height, 0x0a0f2e)
+      .setOrigin(0, 0);
+
+    this.add
+      .text(width / 2, height * 0.28, "MATHEUS & LARISSA", {
+        fontFamily: "monospace",
+        fontSize: "34px",
+        color: "#ffffff",
+      })
+      .setOrigin(0.5);
+
+    this.add
+      .text(width / 2, height * 0.28 + 40, "— A Jornada —", {
+        fontFamily: "monospace",
+        fontSize: "18px",
+        color: "#ffe066",
+      })
+      .setOrigin(0.5);
+
+    const menuWidth = 280;
+    const menuHeight = 160;
+
+    this.menu = new MenuWindow(this, {
+      x: width / 2 - menuWidth / 2,
+      y: height * 0.5,
+      width: menuWidth,
+      height: menuHeight,
+      options: ["NEW GAME", "LOAD GAME", "PASSWORD"],
+      onSelect: (index, label) => this._handleSelect(label),
+    });
+  }
+
+  update() {
+    this.menu.update();
+  }
+
+  _handleSelect(label) {
+    if (label === "NEW GAME") this.scene.start("NewGameScene");
+    if (label === "LOAD GAME") this.scene.start("LoadGameScene");
+    if (label === "PASSWORD") this.scene.start("PasswordScene");
+  }
+}
+
+
+// ==================== scenes/NewGameScene.js ====================
+// ============================================================================
+// NewGameScene.js
+// Fluxo de NEW GAME (ver seção 6 do prompt):
+// 1) Escolher personagem (Matheus Machado / Larissa Passos)
+// 2) Criar Nickname (deve começar com "@")
+// 3) Criar senha
+// 4) Salvar no Firebase e iniciar a jornada
+// ============================================================================
+
+
+
+
+
+
+class NewGameScene extends Phaser.Scene {
+  constructor() {
+    super("NewGameScene");
+  }
+
+  create() {
+    const { width, height } = this.scale;
+    this.add.rectangle(0, 0, width, height, 0x0a0f2e).setOrigin(0, 0);
+    this.add
+      .text(width / 2, 60, "ESCOLHA SEU PERSONAGEM", {
+        fontFamily: "monospace",
+        fontSize: "20px",
+        color: "#ffffff",
+      })
+      .setOrigin(0.5);
+
+    // Placeholders visuais dos dois personagens
+    this.add.image(width / 2 - 100, height / 2 - 20, "char_matheus").setScale(3);
+    this.add
+      .text(width / 2 - 100, height / 2 + 60, "Matheus Machado\n(Perus - SP)", {
+        fontFamily: "monospace",
+        fontSize: "12px",
+        color: "#ffffff",
+        align: "center",
+      })
+      .setOrigin(0.5);
+
+    this.add.image(width / 2 + 100, height / 2 - 20, "char_larissa").setScale(3);
+    this.add
+      .text(width / 2 + 100, height / 2 + 60, "Larissa Passos\n(Pouso Alegre - MG)", {
+        fontFamily: "monospace",
+        fontSize: "12px",
+        color: "#ffffff",
+        align: "center",
+      })
+      .setOrigin(0.5);
+
+    this.menu = new MenuWindow(this, {
+      x: width / 2 - 160,
+      y: height - 140,
+      width: 320,
+      height: 100,
+      options: ["Matheus Machado", "Larissa Passos", "Voltar"],
+      onSelect: (index, label) => this._handleCharacterSelect(label),
+    });
+
+    this.dialog = new DialogBox(this);
+  }
+
+  update() {
+    this.menu.update();
+  }
+
+  async _handleCharacterSelect(label) {
+    if (label === "Voltar") {
+      this.scene.start("TitleScene");
+      return;
+    }
+
+    const character = label === "Matheus Machado" ? "matheus" : "larissa";
+    this.menu.destroy();
+
+    try {
+      const nickname = await domPrompt({
+        title: "Crie seu Nickname (deve começar com @)",
+        placeholder: "@seuNome",
+        validate: (value) => {
+          if (!value.startsWith("@")) return "O nickname deve começar com @.";
+          if (value.length < 3) return "Nickname muito curto.";
+          return null;
+        },
+      });
+
+      const password = await domPrompt({
+        title: "Crie uma senha para sua partida",
+        type: "password",
+        validate: (value) => (value.length < 4 ? "A senha deve ter ao menos 4 caracteres." : null),
+      });
+
+      await SaveManager.createNewGame({ character, nickname, password });
+
+      await this.dialog.show(
+        `Sua jornada como ${label} está prestes a começar, ${nickname}...`
+      );
+
+      this.scene.start("OverworldScene", { character, nickname });
+    } catch (err) {
+      await this.dialog.show(`Erro ao criar partida: ${err.message}`);
+      this.scene.start("TitleScene");
+    }
+  }
+}
+
+
+// ==================== scenes/LoadGameScene.js ====================
+// ============================================================================
+// LoadGameScene.js
+// Fluxo de LOAD GAME (ver seção 7 do prompt):
+// 1) Consulta o Firebase e lista os Nicknames existentes
+// 2) Jogador seleciona o Nickname
+// 3) Sistema pede a senha e valida via Firebase
+// 4) Se correta, carrega a partida exatamente do ponto salvo
+// ============================================================================
+
+
+
+
+
+
+class LoadGameScene extends Phaser.Scene {
+  constructor() {
+    super("LoadGameScene");
+  }
+
+  async create() {
+    const { width, height } = this.scale;
+    this.add.rectangle(0, 0, width, height, 0x0a0f2e).setOrigin(0, 0);
+    this.add
+      .text(width / 2, 60, "CARREGAR PARTIDA", {
+        fontFamily: "monospace",
+        fontSize: "20px",
+        color: "#ffffff",
+      })
+      .setOrigin(0.5);
+
+    this.dialog = new DialogBox(this);
+
+    this.loadingText = this.add
+      .text(width / 2, height / 2, "Consultando o Firebase...", {
+        fontFamily: "monospace",
+        fontSize: "14px",
+        color: "#ffe066",
+      })
+      .setOrigin(0.5);
+
+    try {
+      const nicknames = await SaveManager.listSaves();
+      this.loadingText.destroy();
+
+      if (nicknames.length === 0) {
+        await this.dialog.show("Nenhuma partida salva foi encontrada ainda.");
+        this.scene.start("TitleScene");
+        return;
+      }
+
+      const options = [...nicknames, "Voltar"];
+      this.menu = new MenuWindow(this, {
+        x: width / 2 - 160,
+        y: height / 2 - 100,
+        width: 320,
+        height: Math.min(60 + options.length * 34, height - 160),
+        options,
+        onSelect: (index, label) => this._handleSelectNickname(label),
+      });
+    } catch (err) {
+      this.loadingText.setText(`Erro ao consultar o Firebase: ${err.message}`);
+    }
+  }
+
+  update() {
+    if (this.menu) this.menu.update();
+  }
+
+  async _handleSelectNickname(nickname) {
+    if (nickname === "Voltar") {
+      this.scene.start("TitleScene");
+      return;
+    }
+
+    this.menu.destroy();
+    this.menu = null;
+
+    try {
+      const password = await domPrompt({
+        title: `Senha para ${nickname}`,
+        type: "password",
+      });
+
+      const saveData = await SaveManager.authenticate(nickname, password);
+
+      await this.dialog.show(`Bem-vindo(a) de volta, ${nickname}!`);
+
+      this.scene.start("OverworldScene", {
+        character: saveData.character,
+        nickname,
+        progress: saveData.progress,
+      });
+    } catch (err) {
+      await this.dialog.show(`Falha na autenticação: ${err.message}`);
+      this.scene.start("TitleScene");
+    }
+  }
+}
+
+
+// ==================== scenes/PasswordScene.js ====================
+// ============================================================================
+// PasswordScene.js
+// Tela de PASSWORD (ver seção 8 do prompt): o jogador digita um código de
+// exatamente 6 números. Cada código pode disparar uma função específica.
+//
+// Códigos atualmente especificados (mini-games, ver documento de senhas):
+//   024688 -> Jogo da Memória Dimensional
+//   086422 -> Campo Minado das Catacumbas
+//   013579 -> Sudoku do Templo Antigo
+//
+// IMPORTANTE: não adicionar novos códigos/funções além dos especificados.
+// ============================================================================
+
+const CODE_ACTIONS = {
+  "024688": "MemoryMinigameScene",
+  "086422": "MinesweeperMinigameScene",
+  "013579": "SudokuMinigameScene",
+};
+
+class PasswordScene extends Phaser.Scene {
+  constructor() {
+    super("PasswordScene");
+  }
+
+  create() {
+    const { width, height } = this.scale;
+    this.digits = [];
+
+    this.add.rectangle(0, 0, width, height, 0x0a0f2e).setOrigin(0, 0);
+    this.add
+      .text(width / 2, 60, "DIGITE O CÓDIGO SECRETO", {
+        fontFamily: "monospace",
+        fontSize: "20px",
+        color: "#ffffff",
+      })
+      .setOrigin(0.5);
+
+    // Display dos 6 dígitos
+    this.displayText = this.add
+      .text(width / 2, 130, "_ _ _ _ _ _", {
+        fontFamily: "monospace",
+        fontSize: "32px",
+        color: "#ffe066",
+        letterSpacing: 8,
+      })
+      .setOrigin(0.5);
+
+    this.errorText = this.add
+      .text(width / 2, 170, "", {
+        fontFamily: "monospace",
+        fontSize: "14px",
+        color: "#ff6b6b",
+      })
+      .setOrigin(0.5);
+
+    this._buildKeypad(width, height);
+
+    this.backKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.ESC);
+    this.input.keyboard.on("keydown", (event) => this._handlePhysicalKey(event));
+  }
+
+  _buildKeypad(width, height) {
+    const labels = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "APAGAR", "0", "OK"];
+    const cols = 3;
+    const cellW = 90;
+    const cellH = 60;
+    const startX = width / 2 - cellW;
+    const startY = height / 2 - cellH;
+
+    labels.forEach((label, i) => {
+      const col = i % cols;
+      const row = Math.floor(i / cols);
+      const x = startX + col * cellW;
+      const y = startY + row * cellH;
+
+      const bg = this.add.rectangle(x, y, cellW - 8, cellH - 8, 0x10186b).setStrokeStyle(3, 0xffffff);
+      const txt = this.add
+        .text(x, y, label, {
+          fontFamily: "monospace",
+          fontSize: "18px",
+          color: "#ffffff",
+        })
+        .setOrigin(0.5);
+
+      bg.setInteractive({ useHandCursor: true });
+      bg.on("pointerdown", () => this._handleKey(label));
+      bg.on("pointerover", () => bg.setFillStyle(0x1c2694));
+      bg.on("pointerout", () => bg.setFillStyle(0x10186b));
+    });
+  }
+
+  _handlePhysicalKey(event) {
+    if (event.key >= "0" && event.key <= "9") this._handleKey(event.key);
+    if (event.key === "Backspace") this._handleKey("APAGAR");
+    if (event.key === "Enter") this._handleKey("OK");
+    if (event.key === "Escape") this.scene.start("TitleScene");
+  }
+
+  _handleKey(label) {
+    if (label === "APAGAR") {
+      this.digits.pop();
+    } else if (label === "OK") {
+      this._submit();
+      return;
+    } else if (this.digits.length < 6) {
+      this.digits.push(label);
+    }
+    this._updateDisplay();
+  }
+
+  _updateDisplay() {
+    const slots = Array.from({ length: 6 }, (_, i) => this.digits[i] || "_");
+    this.displayText.setText(slots.join(" "));
+  }
+
+  _submit() {
+    const code = this.digits.join("");
+    if (code.length !== 6) {
+      this.errorText.setText("O código deve ter exatamente 6 números.");
+      return;
+    }
+
+    const targetScene = CODE_ACTIONS[code];
+    if (targetScene) {
+      this.scene.start(targetScene);
+    } else {
+      this.errorText.setText("Código inválido.");
+      this.digits = [];
+      this._updateDisplay();
+    }
+  }
+}
+
+
+// ==================== scenes/OverworldScene.js ====================
+// ============================================================================
+// OverworldScene.js
+// Cena de exploração top-down baseada em grid/tile (ver seções 3 e 4 do
+// prompt). Este é um mapa placeholder mínimo só para validar a mecânica de
+// movimentação/colisão — os mapas reais de cada jornada (Perus-SP,
+// Pouso Alegre-MG, e todos os pontos intermediários) serão adicionados
+// incrementalmente depois.
+// ============================================================================
+
+const TILE_SIZE = 32;
+
+// Legenda: 0 = grama, 1 = árvore (bloqueado), 2 = caminho, 3 = água (bloqueado),
+// 4 = arbusto (bloqueado), 5 = flor (livre)
+const BLOCKED_TILES = new Set([1, 3, 4]);
+
+const TILE_TEXTURE = {
+  0: "tile_grass",
+  1: "tile_tree",
+  2: "tile_path",
+  3: "tile_water",
+  4: "tile_bush",
+  5: "tile_flower_pink",
+};
+
+// Mapa placeholder 15x11 (será substituído pelos mapas reais de cada jornada)
+const PLACEHOLDER_MAP = [
+  [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+  [1, 0, 0, 0, 0, 2, 2, 2, 0, 0, 5, 0, 0, 0, 1],
+  [1, 0, 4, 0, 0, 2, 0, 2, 0, 0, 0, 0, 4, 0, 1],
+  [1, 0, 0, 0, 0, 2, 0, 2, 2, 2, 2, 2, 0, 0, 1],
+  [1, 0, 0, 5, 0, 2, 0, 0, 0, 0, 0, 2, 0, 0, 1],
+  [1, 3, 3, 0, 0, 2, 0, 4, 0, 4, 0, 2, 0, 0, 1],
+  [1, 3, 3, 0, 0, 2, 2, 2, 2, 2, 0, 2, 0, 0, 1],
+  [1, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 2, 0, 0, 1],
+  [1, 0, 5, 0, 0, 0, 0, 0, 0, 2, 2, 2, 0, 0, 1],
+  [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+  [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+];
+
+class OverworldScene extends Phaser.Scene {
+  constructor() {
+    super("OverworldScene");
+  }
+
+  init(data) {
+    this.character = data.character || "matheus";
+    this.nickname = data.nickname || "@jogador";
+    this.progress = data.progress || null;
+  }
+
+  create() {
+    this._drawMap();
+    this._createPlayer();
+    this._setupCamera();
+    this._setupInput();
+
+    this.add
+      .text(8, 8, `${this.nickname} (${this.character})`, {
+        fontFamily: "monospace",
+        fontSize: "12px",
+        color: "#ffffff",
+        backgroundColor: "#000000",
+      })
+      .setScrollFactor(0)
+      .setDepth(2000);
+
+    this.isMoving = false;
+  }
+
+  _drawMap() {
+    for (let row = 0; row < PLACEHOLDER_MAP.length; row++) {
+      for (let col = 0; col < PLACEHOLDER_MAP[row].length; col++) {
+        const tileId = PLACEHOLDER_MAP[row][col];
+        this.add.image(
+          col * TILE_SIZE + TILE_SIZE / 2,
+          row * TILE_SIZE + TILE_SIZE / 2,
+          TILE_TEXTURE[tileId]
+        );
+      }
+    }
+    this.mapWidth = PLACEHOLDER_MAP[0].length * TILE_SIZE;
+    this.mapHeight = PLACEHOLDER_MAP.length * TILE_SIZE;
+  }
+
+  _createPlayer() {
+    const startCol = this.progress?.position?.x ?? 7;
+    const startRow = this.progress?.position?.y ?? 5;
+
+    this.playerGridPos = { x: startCol, y: startRow };
+    this.player = this.add.image(
+      startCol * TILE_SIZE + TILE_SIZE / 2,
+      startRow * TILE_SIZE + TILE_SIZE / 2,
+      `char_${this.character}`
+    );
+    this.player.setDepth(10);
+  }
+
+  _setupCamera() {
+    this.cameras.main.setBounds(0, 0, this.mapWidth, this.mapHeight);
+    this.cameras.main.startFollow(this.player, true, 0.15, 0.15);
+    this.cameras.main.setZoom(1.5);
+  }
+
+  _setupInput() {
+    this.cursors = this.input.keyboard.createCursorKeys();
+    this.wasd = this.input.keyboard.addKeys({
+      up: Phaser.Input.Keyboard.KeyCodes.W,
+      down: Phaser.Input.Keyboard.KeyCodes.S,
+      left: Phaser.Input.Keyboard.KeyCodes.A,
+      right: Phaser.Input.Keyboard.KeyCodes.D,
+    });
+  }
+
+  update() {
+    if (this.isMoving) return;
+
+    let dx = 0;
+    let dy = 0;
+    if (this.cursors.left.isDown || this.wasd.left.isDown) dx = -1;
+    else if (this.cursors.right.isDown || this.wasd.right.isDown) dx = 1;
+    else if (this.cursors.up.isDown || this.wasd.up.isDown) dy = -1;
+    else if (this.cursors.down.isDown || this.wasd.down.isDown) dy = 1;
+
+    if (dx !== 0 || dy !== 0) this._tryMove(dx, dy);
+  }
+
+  _tryMove(dx, dy) {
+    const targetX = this.playerGridPos.x + dx;
+    const targetY = this.playerGridPos.y + dy;
+
+    const row = PLACEHOLDER_MAP[targetY];
+    if (!row) return;
+    const tileId = row[targetX];
+    if (tileId === undefined || BLOCKED_TILES.has(tileId)) return; // colisão
+
+    this.isMoving = true;
+    this.playerGridPos = { x: targetX, y: targetY };
+
+    this.tweens.add({
+      targets: this.player,
+      x: targetX * TILE_SIZE + TILE_SIZE / 2,
+      y: targetY * TILE_SIZE + TILE_SIZE / 2,
+      duration: 150,
+      onComplete: () => {
+        this.isMoving = false;
+      },
+    });
+  }
+}
+
+
+// ==================== scenes/MemoryMinigameScene.js ====================
+// ============================================================================
+// MemoryMinigameScene.js
+// Mini-game 1: Jogo da Memória Dimensional (password 024688).
+// 36 pares (72 cartas) misturando formas geométricas, elementos químicos,
+// numerais romanos e numerais gregos. A cada par acertado, o tabuleiro
+// inteiro se re-embaralha (posições das cartas restantes mudam).
+// ============================================================================
+
+
+
+const SYMBOLS = [
+  // Formas geométricas pixeladas (9)
+  "▲", "■", "●", "◆", "★", "⬟", "⬢", "▶", "⬣",
+  // Elementos da tabela periódica (9)
+  "H", "He", "Li", "Be", "B", "C", "N", "O", "F",
+  // Numerais romanos (9)
+  "I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX",
+  // Numerais gregos (9)
+  "Alfa", "Beta", "Gama", "Delta", "Épsilon", "Zeta", "Eta", "Teta", "Iota",
+];
+
+const COLS = 9;
+const ROWS = 8; // 9 x 8 = 72 cartas
+const CARD_W = 64;
+const CARD_H = 64;
+const GAP = 6;
+
+class MemoryMinigameScene extends Phaser.Scene {
+  constructor() {
+    super("MemoryMinigameScene");
+  }
+
+  create() {
+    this.pairsFound = 0;
+    this.totalPairs = SYMBOLS.length; // 36
+    this.locked = false;
+    this.selected = [];
+
+    const { width } = this.scale;
+    this.add
+      .text(width / 2, 24, "JOGO DA MEMÓRIA DIMENSIONAL", {
+        fontFamily: "monospace",
+        fontSize: "18px",
+        color: "#ffffff",
+      })
+      .setOrigin(0.5, 0);
+
+    this.progressText = this.add
+      .text(width / 2, 54, "", {
+        fontFamily: "monospace",
+        fontSize: "14px",
+        color: "#ffe066",
+      })
+      .setOrigin(0.5, 0);
+
+    this._newDeck();
+    this._layoutBoard();
+    this._updateProgressText();
+  }
+
+  _newDeck() {
+    const deck = [...SYMBOLS, ...SYMBOLS].map((symbol, i) => ({
+      id: i,
+      symbol,
+      matched: false,
+      revealed: false,
+    }));
+    Phaser.Utils.Array.Shuffle(deck);
+    this.deck = deck;
+  }
+
+  _layoutBoard() {
+    if (this.boardContainer) this.boardContainer.destroy();
+
+    const boardWidth = COLS * (CARD_W + GAP);
+    const boardHeight = ROWS * (CARD_H + GAP);
+    const startX = (this.scale.width - boardWidth) / 2 + CARD_W / 2;
+    const startY = 90;
+
+    this.boardContainer = this.add.container(0, 0);
+    this.cardViews = [];
+
+    this.deck.forEach((card, i) => {
+      const col = i % COLS;
+      const row = Math.floor(i / COLS);
+      const x = startX + col * (CARD_W + GAP);
+      const y = startY + row * (CARD_H + GAP);
+
+      const bg = this.add
+        .rectangle(x, y, CARD_W, CARD_H, card.matched ? 0x2e7d32 : 0x10186b)
+        .setStrokeStyle(3, 0xffffff);
+      const label = this.add
+        .text(x, y, card.revealed || card.matched ? card.symbol : "?", {
+          fontFamily: "monospace",
+          fontSize: "16px",
+          color: "#ffffff",
+        })
+        .setOrigin(0.5);
+
+      if (!card.matched) {
+        bg.setInteractive({ useHandCursor: true });
+        bg.on("pointerdown", () => this._handleCardClick(card, i));
+      }
+
+      this.boardContainer.add([bg, label]);
+      this.cardViews[i] = { bg, label };
+    });
+  }
+
+  _handleCardClick(card, index) {
+    if (this.locked || card.revealed || card.matched) return;
+
+    card.revealed = true;
+    this._refreshCard(index);
+    this.selected.push({ card, index });
+
+    if (this.selected.length === 2) {
+      this.locked = true;
+      const [a, b] = this.selected;
+
+      if (a.card.symbol === b.card.symbol) {
+        a.card.matched = true;
+        b.card.matched = true;
+        this.pairsFound++;
+        this._updateProgressText();
+
+        this.time.delayedCall(300, () => {
+          this.selected = [];
+          this.locked = false;
+
+          if (this.pairsFound >= this.totalPairs) {
+            this._onVictory();
+          } else {
+            // Mecânica de dificuldade: re-embaralha as cartas restantes
+            this._reshuffleRemaining();
+          }
+        });
+      } else {
+        this.time.delayedCall(700, () => {
+          a.card.revealed = false;
+          b.card.revealed = false;
+          this._refreshCard(a.index);
+          this._refreshCard(b.index);
+          this.selected = [];
+          this.locked = false;
+        });
+      }
+    }
+  }
+
+  _reshuffleRemaining() {
+    // Reembaralha somente as cartas ainda não encontradas, preservando as
+    // já casadas em suas posições (elas ficam visíveis e "resolvidas").
+    const remainingIndexes = this.deck
+      .map((c, i) => i)
+      .filter((i) => !this.deck[i].matched);
+    const remainingCards = remainingIndexes.map((i) => this.deck[i]);
+    Phaser.Utils.Array.Shuffle(remainingCards);
+
+    remainingIndexes.forEach((i, k) => {
+      remainingCards[k].revealed = false;
+      this.deck[i] = remainingCards[k];
+    });
+
+    this._layoutBoard();
+  }
+
+  _refreshCard(index) {
+    const card = this.deck[index];
+    const { bg, label } = this.cardViews[index];
+    label.setText(card.revealed || card.matched ? card.symbol : "?");
+    bg.setFillStyle(card.matched ? 0x2e7d32 : 0x10186b);
+  }
+
+  _updateProgressText() {
+    this.progressText.setText(`Pares encontrados: ${this.pairsFound} / ${this.totalPairs}`);
+  }
+
+  async _onVictory() {
+    const effect = new VictoryEffect(this);
+    await effect.play();
+    this.scene.start("TitleScene");
+  }
+}
+
+
+// ==================== scenes/MinesweeperMinigameScene.js ====================
+// ============================================================================
+// MinesweeperMinigameScene.js
+// Mini-game 2: O Campo Minado das Catacumbas (password 086422).
+// Regra dinâmica: a cada clique em espaço seguro, adiciona instantaneamente
+// mais 4 bombas em posições aleatórias, com alerta na tela.
+// Garantia: o algoritmo sempre deixa pelo menos 1 espaço livre sem bomba.
+// ============================================================================
+
+
+
+const GRID_SIZE = 10; // 10x10 = 100 células
+const CELL = 48;
+const INITIAL_BOMBS = 5;
+const BOMBS_PER_SAFE_CLICK = 4;
+
+class MinesweeperMinigameScene extends Phaser.Scene {
+  constructor() {
+    super("MinesweeperMinigameScene");
+  }
+
+  create() {
+    const { width } = this.scale;
+
+    this.add
+      .text(width / 2, 20, "CAMPO MINADO DAS CATACUMBAS", {
+        fontFamily: "monospace",
+        fontSize: "18px",
+        color: "#ffffff",
+      })
+      .setOrigin(0.5, 0);
+
+    this.alertText = this.add
+      .text(width / 2, 50, "", {
+        fontFamily: "monospace",
+        fontSize: "13px",
+        color: "#ff8a65",
+      })
+      .setOrigin(0.5, 0);
+
+    this._initBoard();
+    this._renderBoard();
+  }
+
+  _initBoard() {
+    this.totalCells = GRID_SIZE * GRID_SIZE;
+    this.bombs = new Set(); // "x,y"
+    this.revealed = new Set();
+    this.gameOver = false;
+
+    // Bombas iniciais
+    while (this.bombs.size < INITIAL_BOMBS) {
+      const x = Phaser.Math.Between(0, GRID_SIZE - 1);
+      const y = Phaser.Math.Between(0, GRID_SIZE - 1);
+      this.bombs.add(`${x},${y}`);
+    }
+  }
+
+  _renderBoard() {
+    if (this.boardContainer) this.boardContainer.destroy();
+    this.boardContainer = this.add.container(0, 0);
+    this.cellViews = {};
+
+    const boardWidth = GRID_SIZE * CELL;
+    const startX = (this.scale.width - boardWidth) / 2 + CELL / 2;
+    const startY = 90;
+
+    for (let y = 0; y < GRID_SIZE; y++) {
+      for (let x = 0; x < GRID_SIZE; x++) {
+        const key = `${x},${y}`;
+        const px = startX + x * CELL;
+        const py = startY + y * CELL;
+        const isRevealed = this.revealed.has(key);
+
+        const bg = this.add
+          .rectangle(px, py, CELL - 4, CELL - 4, isRevealed ? 0x3f9142 : 0x10186b)
+          .setStrokeStyle(2, 0xffffff);
+
+        let labelText = "";
+        if (isRevealed) {
+          const count = this._countAdjacentBombs(x, y);
+          labelText = count > 0 ? String(count) : "";
+        }
+
+        const label = this.add
+          .text(px, py, labelText, {
+            fontFamily: "monospace",
+            fontSize: "16px",
+            color: "#ffffff",
+          })
+          .setOrigin(0.5);
+
+        if (!isRevealed) {
+          bg.setInteractive({ useHandCursor: true });
+          bg.on("pointerdown", () => this._handleClick(x, y));
+        }
+
+        this.boardContainer.add([bg, label]);
+        this.cellViews[key] = { bg, label };
+      }
+    }
+  }
+
+  _countAdjacentBombs(x, y) {
+    let count = 0;
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        if (dx === 0 && dy === 0) continue;
+        if (this.bombs.has(`${x + dx},${y + dy}`)) count++;
+      }
+    }
+    return count;
+  }
+
+  _handleClick(x, y) {
+    if (this.gameOver) return;
+    const key = `${x},${y}`;
+    if (this.revealed.has(key)) return;
+
+    if (this.bombs.has(key)) {
+      this._onDefeat(x, y);
+      return;
+    }
+
+    this.revealed.add(key);
+    this._addBombsDynamically(key);
+    this._renderBoard();
+
+    if (this._checkVictory()) {
+      this._onVictory();
+    }
+  }
+
+  /** Adiciona até 4 bombas novas, garantindo que sempre sobre ao menos 1 espaço livre. */
+  _addBombsDynamically(justRevealedKey) {
+    const candidates = [];
+    for (let y = 0; y < GRID_SIZE; y++) {
+      for (let x = 0; x < GRID_SIZE; x++) {
+        const key = `${x},${y}`;
+        if (key === justRevealedKey) continue;
+        if (this.bombs.has(key)) continue;
+        if (this.revealed.has(key)) continue;
+        candidates.push(key);
+      }
+    }
+
+    // Garantia matemática: nunca deixar 0 espaços livres sem bomba.
+    const maxAddable = Math.max(0, candidates.length - 1);
+    const addCount = Math.min(BOMBS_PER_SAFE_CLICK, maxAddable);
+
+    if (addCount <= 0) return;
+
+    Phaser.Utils.Array.Shuffle(candidates);
+    for (let i = 0; i < addCount; i++) {
+      this.bombs.add(candidates[i]);
+    }
+
+    this.alertText.setText(`+${addCount} bombas adicionadas. Tente a sorte mais uma vez!`);
+    this.time.delayedCall(1800, () => this.alertText.setText(""));
+  }
+
+  _checkVictory() {
+    const safeCells = this.totalCells - this.bombs.size;
+    return this.revealed.size >= safeCells;
+  }
+
+  _onDefeat(x, y) {
+    this.gameOver = true;
+    // Revela todas as bombas
+    for (let by = 0; by < GRID_SIZE; by++) {
+      for (let bx = 0; bx < GRID_SIZE; bx++) {
+        if (this.bombs.has(`${bx},${by}`)) this.revealed.add(`${bx},${by}`);
+      }
+    }
+    this._renderBoard();
+    this.alertText.setColor("#ff5252");
+    this.alertText.setText("Você pisou em uma armadilha! Reiniciando...");
+
+    this.time.delayedCall(2000, () => {
+      this._initBoard();
+      this.alertText.setColor("#ff8a65");
+      this.alertText.setText("");
+      this._renderBoard();
+    });
+  }
+
+  async _onVictory() {
+    this.gameOver = true;
+    const effect = new VictoryEffect(this);
+    await effect.play();
+    this.scene.start("TitleScene");
+  }
+}
+
+
+// ==================== scenes/SudokuMinigameScene.js ====================
+// ============================================================================
+// SudokuMinigameScene.js
+// Mini-game 3: O Sudoku do Templo Antigo (password 013579).
+// Puzzle de nível avançado com relógio regressivo (limite de 15 minutos).
+// Se o tempo esgotar antes de concluir, o jogo falha, reinicia e gera um
+// novo puzzle diferente.
+//
+// OBS: o gerador abaixo cria puzzles válidos por permutação de uma solução
+// base (troca de linhas/colunas dentro das bandas, troca de bandas/pilhas e
+// re-rotulagem de dígitos), o que garante uma solução válida conhecida.
+// A unicidade estrita da solução não é formalmente verificada — pode ser
+// refinada depois caso seja um requisito importante.
+// ============================================================================
+
+
+
+const TIME_LIMIT_SECONDS = 15 * 60;
+const CLUES_REMAINING = 30; // nível avançado = poucas dicas
+
+const BASE_SOLUTION = [
+  [5, 3, 4, 6, 7, 8, 9, 1, 2],
+  [6, 7, 2, 1, 9, 5, 3, 4, 8],
+  [1, 9, 8, 3, 4, 2, 5, 6, 7],
+  [8, 5, 9, 7, 6, 1, 4, 2, 3],
+  [4, 2, 6, 8, 5, 3, 7, 9, 1],
+  [7, 1, 3, 9, 2, 4, 8, 5, 6],
+  [9, 6, 1, 5, 3, 7, 2, 8, 4],
+  [2, 8, 7, 4, 1, 9, 6, 3, 5],
+  [3, 4, 5, 2, 8, 6, 1, 7, 9],
+];
+
+function generatePuzzle() {
+  let grid = BASE_SOLUTION.map((row) => [...row]);
+
+  // Embaralha linhas dentro de cada banda de 3 e as próprias bandas
+  for (let band = 0; band < 3; band++) {
+    const rows = [0, 1, 2].map((i) => band * 3 + i);
+    Phaser.Utils.Array.Shuffle(rows);
+    const bandRows = rows.map((r) => grid[r]);
+    for (let i = 0; i < 3; i++) grid[band * 3 + i] = bandRows[i];
+  }
+
+  // Embaralha colunas dentro de cada pilha de 3
+  for (let stack = 0; stack < 3; stack++) {
+    const cols = [0, 1, 2].map((i) => stack * 3 + i);
+    Phaser.Utils.Array.Shuffle(cols);
+    grid = grid.map((row) => {
+      const newRow = [...row];
+      [0, 1, 2].forEach((i) => {
+        newRow[stack * 3 + i] = row[cols[i]];
+      });
+      return newRow;
+    });
+  }
+
+  // Re-rotula os dígitos (1-9 -> permutação aleatória de 1-9)
+  const digitMap = Phaser.Utils.Array.Shuffle([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  grid = grid.map((row) => row.map((v) => digitMap[v - 1]));
+
+  const solution = grid.map((row) => [...row]);
+
+  // Remove células até sobrar apenas CLUES_REMAINING pistas
+  const positions = [];
+  for (let y = 0; y < 9; y++) for (let x = 0; x < 9; x++) positions.push([x, y]);
+  Phaser.Utils.Array.Shuffle(positions);
+
+  const totalToRemove = 81 - CLUES_REMAINING;
+  const puzzle = grid.map((row) => [...row]);
+  for (let i = 0; i < totalToRemove; i++) {
+    const [x, y] = positions[i];
+    puzzle[y][x] = 0;
+  }
+
+  return { puzzle, solution };
+}
+
+class SudokuMinigameScene extends Phaser.Scene {
+  constructor() {
+    super("SudokuMinigameScene");
+  }
+
+  create() {
+    const { width } = this.scale;
+
+    this.add
+      .text(width / 2, 16, "O SUDOKU DO TEMPLO ANTIGO", {
+        fontFamily: "monospace",
+        fontSize: "18px",
+        color: "#ffffff",
+      })
+      .setOrigin(0.5, 0);
+
+    this.timerText = this.add
+      .text(width / 2, 44, "", {
+        fontFamily: "monospace",
+        fontSize: "16px",
+        color: "#ffe066",
+      })
+      .setOrigin(0.5, 0);
+
+    this._startNewPuzzle();
+
+    this.time.addEvent({
+      delay: 1000,
+      loop: true,
+      callback: () => this._tickTimer(),
+    });
+  }
+
+  _startNewPuzzle() {
+    const { puzzle, solution } = generatePuzzle();
+    this.puzzle = puzzle;
+    this.solution = solution;
+    this.board = puzzle.map((row) => [...row]);
+    this.fixedCells = puzzle.map((row) => row.map((v) => v !== 0));
+    this.secondsLeft = TIME_LIMIT_SECONDS;
+    this.selectedCell = null;
+    this.finished = false;
+
+    this._renderBoard();
+    this._renderKeypad();
+    this._updateTimerText();
+  }
+
+  _renderBoard() {
+    if (this.boardContainer) this.boardContainer.destroy();
+    this.boardContainer = this.add.container(0, 0);
+    this.cellViews = [];
+
+    const cellSize = 36;
+    const boardSize = cellSize * 9;
+    const startX = this.scale.width / 2 - boardSize / 2 + cellSize / 2;
+    const startY = 80;
+
+    for (let y = 0; y < 9; y++) {
+      this.cellViews[y] = [];
+      for (let x = 0; x < 9; x++) {
+        const px = startX + x * cellSize;
+        const py = startY + y * cellSize;
+        const isFixed = this.fixedCells[y][x];
+        const value = this.board[y][x];
+
+        const bg = this.add
+          .rectangle(px, py, cellSize - 2, cellSize - 2, isFixed ? 0x1c2694 : 0x10186b)
+          .setStrokeStyle(1, 0xffffff);
+
+        // Bordas grossas a cada bloco 3x3
+        if (x % 3 === 0) bg.setStrokeStyle(1, 0xffffff);
+
+        const label = this.add
+          .text(px, py, value === 0 ? "" : String(value), {
+            fontFamily: "monospace",
+            fontSize: "16px",
+            color: isFixed ? "#ffe066" : "#ffffff",
+          })
+          .setOrigin(0.5);
+
+        if (!isFixed) {
+          bg.setInteractive({ useHandCursor: true });
+          bg.on("pointerdown", () => this._selectCell(x, y));
+        }
+
+        this.boardContainer.add([bg, label]);
+        this.cellViews[y][x] = { bg, label };
+      }
+    }
+  }
+
+  _renderKeypad() {
+    if (this.keypadContainer) this.keypadContainer.destroy();
+    this.keypadContainer = this.add.container(0, 0);
+
+    const labels = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "APAGAR"];
+    const btnSize = 40;
+    const startX = this.scale.width / 2 - (labels.length * btnSize) / 2 + btnSize / 2;
+    const y = 80 + 9 * 36 + 40;
+
+    labels.forEach((label, i) => {
+      const x = startX + i * btnSize;
+      const bg = this.add
+        .rectangle(x, y, btnSize - 6, btnSize - 6, 0x10186b)
+        .setStrokeStyle(2, 0xffffff)
+        .setInteractive({ useHandCursor: true });
+      const txt = this.add
+        .text(x, y, label === "APAGAR" ? "X" : label, {
+          fontFamily: "monospace",
+          fontSize: "14px",
+          color: "#ffffff",
+        })
+        .setOrigin(0.5);
+
+      bg.on("pointerdown", () => this._handleKeypad(label));
+      this.keypadContainer.add([bg, txt]);
+    });
+  }
+
+  _selectCell(x, y) {
+    if (this.finished) return;
+    this.selectedCell = { x, y };
+  }
+
+  _handleKeypad(label) {
+    if (this.finished || !this.selectedCell) return;
+    const { x, y } = this.selectedCell;
+    if (this.fixedCells[y][x]) return;
+
+    this.board[y][x] = label === "APAGAR" ? 0 : parseInt(label, 10);
+    this.cellViews[y][x].label.setText(this.board[y][x] === 0 ? "" : String(this.board[y][x]));
+
+    if (this._checkVictory()) this._onVictory();
+  }
+
+  _checkVictory() {
+    for (let y = 0; y < 9; y++) {
+      for (let x = 0; x < 9; x++) {
+        if (this.board[y][x] !== this.solution[y][x]) return false;
+      }
+    }
+    return true;
+  }
+
+  _tickTimer() {
+    if (this.finished) return;
+    this.secondsLeft--;
+    this._updateTimerText();
+
+    if (this.secondsLeft <= 0) {
+      this._onTimeUp();
+    }
+  }
+
+  _updateTimerText() {
+    const m = Math.floor(this.secondsLeft / 60)
+      .toString()
+      .padStart(2, "0");
+    const s = (this.secondsLeft % 60).toString().padStart(2, "0");
+    this.timerText.setText(`Tempo restante: ${m}:${s}`);
+  }
+
+  _onTimeUp() {
+    this.finished = true;
+    this.timerText.setText("Tempo esgotado! Gerando novo desafio...");
+    this.time.delayedCall(2000, () => this._startNewPuzzle());
+  }
+
+  async _onVictory() {
+    this.finished = true;
+    const effect = new VictoryEffect(this);
+    await effect.play();
+    this.scene.start("TitleScene");
+  }
+}
+
+
+// ==================== main.js (config + boot do Phaser) ====================
+const config = {
+  type: Phaser.AUTO,
+  width: 800,
+  height: 600,
+  parent: "game-container",
+  backgroundColor: "#000000",
+  pixelArt: true,
+  scale: {
+    mode: Phaser.Scale.FIT,
+    autoCenter: Phaser.Scale.CENTER_BOTH,
+  },
+  scene: [
+    BootScene,
+    TitleScene,
+    NewGameScene,
+    LoadGameScene,
+    PasswordScene,
+    OverworldScene,
+    MemoryMinigameScene,
+    MinesweeperMinigameScene,
+    SudokuMinigameScene,
+  ],
+};
+
+new Phaser.Game(config);
+  </script>
+</body>
+</html>
