@@ -206,7 +206,7 @@
      ARQUIVOS — troque aqui os caminhos dos seus arquivos de mídia
      (coloque os arquivos no mesmo repositório do GitHub Pages)
      ============================================================ */
-  const MUSIC_URL      = "bk-planos-instrumental.mp4"; // música (mp4 de áudio)
+  const MUSIC_URL      = "bk-planos-instrumental.mp3"; // música (mp4 de áudio)
   const BACKGROUND_URL = "fundo.mp4";                  // vídeo/gif de fundo em loop
 
   /* ============================================================
@@ -462,8 +462,12 @@
   }
 
   function onPointerDown(e){
-    if(!started) return;
     const x = (e.touches && e.touches[0]) ? e.touches[0].clientX : e.clientX;
+
+    if(!started){
+      iniciarExperiencia();
+      return;
+    }
 
     if(mode === 'finished'){
       reiniciarExperiencia();
