@@ -326,6 +326,12 @@
   bgVideo.src = BACKGROUND_URL;
   bgMusic.src = MUSIC_URL;
 
+  // Garante que o vídeo de fundo NUNCA emita som (só a música em MUSIC_URL deve tocar)
+  bgVideo.muted = true;
+  bgVideo.volume = 0;
+  bgVideo.defaultMuted = true;
+  bgVideo.setAttribute('muted', '');
+
   // ---------- Partículas ----------
   function criarParticulas(qtd){
     for(let i=0;i<qtd;i++){
