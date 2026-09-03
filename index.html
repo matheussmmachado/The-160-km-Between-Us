@@ -331,7 +331,7 @@
     ]
   ];
 
-  const flatTexts = blocks.map(p => p.join("\n\n"));
+  let flatTexts = []; // preenchido dinamicamente por prepararCarta()
 
   // ---------- Elementos ----------
   const bgVideo      = document.getElementById('bgVideo');
@@ -384,10 +384,16 @@
 
   function fullLenAtual(){ return flatTexts[blockIndex].length; }
 
-  // Tamanho de fonte ÚNICO para toda a carta — calculado uma vez com base
-  // no BLOCO 1 (o tamanho que você gostou) e reaplicado igual em todos os blocos.
-  // Blocos mais longos que não couberem nessa fonte apenas ganham rolagem
-  // (overflow-y:auto no #letterWrap), em vez de mudar de tamanho.
+  // ============================================================
+  // FONTE ÚNICA + DIVISÃO AUTOMÁTICA DE TELAS
+  // A fonte é calculada uma única vez com base no BLOCO 1 (o
+  // tamanho que você gostou) e usada igual em toda a carta.
+  // Cada bloco original é então medido nessa fonte e, se não
+  // couber inteiro no centro da tela, é dividido automaticamente
+  // em mais telas (sempre entre parágrafos, nunca no meio de uma
+  // frase). Assim o texto NUNCA fica cortado e NUNCA precisa de
+  // rolagem — apenas aparece em mais "quadros" quando necessário.
+  // ============================================================
   const FONTE_MAX = 24;
   const FONTE_MIN = 12.5;
   let fontSizeFixo = null;
@@ -395,7 +401,7 @@
   function calcularFontePadrao(){
     let fontSize = Math.min(FONTE_MAX, Math.max(15, window.innerWidth*0.05));
     letterText.style.fontSize = fontSize + 'px';
-    letterText.innerHTML = flatTexts[0].replace(/\n/g,'<br><br>');
+    letterText.innerHTML = blocks[0].join('\n\n').replace(/\n/g,'<br><br>');
 
     const alturaDisponivel = letterWrap.clientHeight - 40;
     let tentativas = 0;
@@ -408,8 +414,39 @@
   }
 
   function aplicarFontePadrao(){
-    if(fontSizeFixo === null) calcularFontePadrao();
     letterText.style.fontSize = fontSizeFixo + 'px';
+  }
+
+  // Divide cada bloco original em quantos "quadros" forem necessários
+  // para que cada um caiba inteiro, sem cortar, na fonte fixa.
+  function expandirBlocosParaCaber(){
+    const alturaDisponivel = letterWrap.clientHeight - 40;
+    letterText.style.fontSize = fontSizeFixo + 'px';
+    const resultado = [];
+
+    blocks.forEach(paragrafos => {
+      let grupoAtual = [];
+      paragrafos.forEach(paragrafo => {
+        const tentativa = grupoAtual.concat([paragrafo]);
+        letterText.innerHTML = tentativa.join('\n\n').replace(/\n/g,'<br><br>');
+        if(grupoAtual.length === 0 || letterText.scrollHeight <= alturaDisponivel){
+          grupoAtual = tentativa;
+        } else {
+          resultado.push(grupoAtual);
+          grupoAtual = [paragrafo];
+        }
+      });
+      if(grupoAtual.length > 0) resultado.push(grupoAtual);
+    });
+
+    return resultado;
+  }
+
+  function prepararCarta(){
+    calcularFontePadrao();
+    const blocosExpandido = expandirBlocosParaCaber();
+    flatTexts = blocosExpandido.map(p => p.join('\n\n'));
+    letterText.innerHTML = '';
   }
 
   function render(){
@@ -591,18 +628,17 @@
     }catch(err){}
   }
 
-  // Recalcula a fonte padrão (uma única vez) se o usuário girar a tela ou redimensionar a janela
+  // Recalcula fonte + divisão automática das telas se o usuário girar o aparelho
   window.addEventListener('resize', function(){
     if(started){
-      fontSizeFixo = null;
-      calcularFontePadrao();
-      letterText.style.fontSize = fontSizeFixo + 'px';
-      render();
+      prepararCarta();
+      reiniciarExperiencia();
     }
   });
 
   function iniciarExperiencia(){
     if(started) return;
+    if(flatTexts.length === 0) prepararCarta(); // segurança, caso o toque seja muito rápido
     started = true;
     startScreen.classList.add('hidden');
     letterWrap.classList.add('visible');
@@ -618,6 +654,15 @@
 
   startScreen.addEventListener('pointerdown', iniciarExperiencia);
   startScreen.addEventListener('touchstart', function(e){ e.preventDefault(); iniciarExperiencia(); }, {passive:false});
+
+  // Prepara a fonte e a divisão automática das telas assim que possível.
+  // Se a fonte do Google Fonts ainda estiver carregando, espera ela para
+  // medir com precisão (evita divisões erradas por causa da fonte de fallback).
+  if(document.fonts && document.fonts.ready){
+    document.fonts.ready.then(prepararCarta).catch(prepararCarta);
+  } else {
+    prepararCarta();
+  }
 
 })();
 </script>
