@@ -493,8 +493,10 @@
         if(blockIndex < flatTexts.length-1){
           blockIndex++;
           revealCount = 0;
+          acc = 0;
           mode = 'typing';
           aplicarFontePadrao();
+          render();
         } else {
           mode = 'finished';
           if(!restartTimer) mostrarDicaReiniciar();
@@ -549,7 +551,9 @@
         if(fadeAcc >= DURACAO_FADE){
           blockIndex++;
           revealCount = 0;
+          acc = 0;
           aplicarFontePadrao();
+          render();                          // limpa o texto (fica vazio) ANTES de reaparecer
           letterText.classList.remove('hide');
           mode = 'typing';
         }
