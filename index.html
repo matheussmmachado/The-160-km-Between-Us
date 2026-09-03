@@ -256,15 +256,21 @@
       "Que você seja forte como a flor de lótus,",
       "que encontra forças para florescer mesmo quando suas raízes estão mergulhadas na escuridão.",
       "Que seja perfumada como o jasmim,",
-      "deixando no mundo uma lembrança doce por onde passar.",
+      "deixando no mundo uma lembrança doce por onde passar."
+    ],
+    [
       "Que seja cintilante como um girassol,",
       "carregando luz mesmo quando o céu parece não querer oferecê-la.",
       "Que seja imponente como um carvalho,",
-      "firme diante das tempestades e impossível de derrubar pela primeira ventania.",
+      "firme diante das tempestades e impossível de derrubar pela primeira ventania."
+    ],
+    [
       "Que seja fértil como um limoeiro,",
       "capaz de transformar cada estação da vida em frutos.",
       "Que seja grandiosa como uma sequoia,",
-      "erguendo-se cada vez mais alto com o passar dos anos.",
+      "erguendo-se cada vez mais alto com o passar dos anos."
+    ],
+    [
       "Que tenha a profundidade de uma figueira,",
       "com raízes capazes de alcançar lugares que poucos conseguem enxergar.",
       "E que tenha a dureza de um quebracho,",
@@ -299,20 +305,29 @@
       "Feliz 25 anos, Larissa Passos de Jesus.",
       "Que os próximos capítulos sejam maiores do que tudo aquilo que você imaginou.",
       "Que a vida seja generosa com você.",
-      "Que seus sonhos encontrem caminhos.",
+      "Que seus sonhos encontrem caminhos."
+    ],
+    [
       "Que sua ciência encontre descobertas.",
       "Que seu coração encontre paz.",
       "E que, onde quer que a vida nos leve…",
-      "você nunca se esqueça de que existe alguém aqui,",
+      "você nunca se esqueça de que existe alguém aqui,"
+    ],
+    [
       "a aproximadamente 150 quilômetros de você,",
       "que te admira,",
       "que acredita em você,",
       "que deseja você…",
-      "e que deseja, sinceramente,",
+      "e que deseja, sinceramente,"
+    ],
+    [
       "ver a mais bela flor que conhece desabrochar.",
       "Feliz aniversário, Larissa.",
       "Hoje o mundo comemora você.",
       "E eu também."
+    ],
+    [
+      "Não vejo a hora de vê-la!"
     ]
   ];
 
@@ -369,22 +384,32 @@
 
   function fullLenAtual(){ return flatTexts[blockIndex].length; }
 
-  // Encolhe a fonte automaticamente até o bloco inteiro caber na tela,
-  // para que NENHUM texto fique cortado ou ilegível fora da área visível.
+  // Tamanho de fonte ÚNICO para toda a carta — calculado uma vez com base
+  // no BLOCO 1 (o tamanho que você gostou) e reaplicado igual em todos os blocos.
+  // Blocos mais longos que não couberem nessa fonte apenas ganham rolagem
+  // (overflow-y:auto no #letterWrap), em vez de mudar de tamanho.
   const FONTE_MAX = 24;
   const FONTE_MIN = 12.5;
-  function ajustarFonteParaBloco(idx){
+  let fontSizeFixo = null;
+
+  function calcularFontePadrao(){
     let fontSize = Math.min(FONTE_MAX, Math.max(15, window.innerWidth*0.05));
     letterText.style.fontSize = fontSize + 'px';
-    letterText.innerHTML = flatTexts[idx].replace(/\n/g,'<br><br>');
+    letterText.innerHTML = flatTexts[0].replace(/\n/g,'<br><br>');
 
-    const alturaDisponivel = letterWrap.clientHeight - 40; // margem de segurança
+    const alturaDisponivel = letterWrap.clientHeight - 40;
     let tentativas = 0;
     while(letterText.scrollHeight > alturaDisponivel && fontSize > FONTE_MIN && tentativas < 60){
       fontSize -= 0.5;
       letterText.style.fontSize = fontSize + 'px';
       tentativas++;
     }
+    fontSizeFixo = fontSize;
+  }
+
+  function aplicarFontePadrao(){
+    if(fontSizeFixo === null) calcularFontePadrao();
+    letterText.style.fontSize = fontSizeFixo + 'px';
   }
 
   function render(){
@@ -432,7 +457,7 @@
           blockIndex++;
           revealCount = 0;
           mode = 'typing';
-          ajustarFonteParaBloco(blockIndex);
+          aplicarFontePadrao();
         } else {
           mode = 'finished';
           if(!restartTimer) mostrarDicaReiniciar();
@@ -445,7 +470,7 @@
       render();
       if(revealCount <= 0 && blockIndex > 0){
         blockIndex--;
-        ajustarFonteParaBloco(blockIndex);
+        aplicarFontePadrao();
         revealCount = fullLenAtual();
         render();
       }
@@ -487,7 +512,7 @@
         if(fadeAcc >= DURACAO_FADE){
           blockIndex++;
           revealCount = 0;
-          ajustarFonteParaBloco(blockIndex);
+          aplicarFontePadrao();
           letterText.classList.remove('hide');
           mode = 'typing';
         }
@@ -557,7 +582,7 @@
     holdDir = 0;
     pausado = false;
     mode = 'typing';
-    ajustarFonteParaBloco(blockIndex);
+    aplicarFontePadrao();
     letterText.classList.remove('hide');
     letterText.innerHTML = '';
     try{
@@ -566,10 +591,12 @@
     }catch(err){}
   }
 
-  // Reajusta a fonte do bloco atual se o usuário girar a tela ou redimensionar a janela
+  // Recalcula a fonte padrão (uma única vez) se o usuário girar a tela ou redimensionar a janela
   window.addEventListener('resize', function(){
     if(started){
-      ajustarFonteParaBloco(blockIndex);
+      fontSizeFixo = null;
+      calcularFontePadrao();
+      letterText.style.fontSize = fontSizeFixo + 'px';
       render();
     }
   });
