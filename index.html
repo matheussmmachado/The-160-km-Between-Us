@@ -125,19 +125,24 @@
       calc(env(safe-area-inset-left) + 26px);
     opacity:0;
     transition: opacity .6s ease;
+    overflow-y:auto;
+    -webkit-overflow-scrolling:touch;
   }
   #letterWrap.visible{ opacity:1; }
 
   #letterText{
     color:var(--cor-texto);
-    font-size:clamp(17px, 5vw, 26px);
-    line-height:1.55;
+    font-size:clamp(15px, 4.6vw, 24px);
+    line-height:1.5;
     text-align:center;
     max-width:640px;
     width:100%;
     text-shadow:var(--sombra-texto);
     transition: opacity .55s ease, filter .55s ease, transform .55s ease;
     font-style:normal;
+    overflow-wrap:break-word;
+    word-break:break-word;
+    margin: auto;
   }
   #letterText.hide{
     opacity:0;
@@ -358,13 +363,29 @@
   let holdDir = 0;       // -1 esquerda (voltar) | 0 nenhum | 1 direita (avançar)
   let acc = 0;
   let nextDelay = VELOCIDADE_MIN;
-  let waitTimer = null;
-  let fadeTimer = null;
   let restartTimer = null;
   let lastFrame = null;
   let started = false;
 
   function fullLenAtual(){ return flatTexts[blockIndex].length; }
+
+  // Encolhe a fonte automaticamente até o bloco inteiro caber na tela,
+  // para que NENHUM texto fique cortado ou ilegível fora da área visível.
+  const FONTE_MAX = 24;
+  const FONTE_MIN = 12.5;
+  function ajustarFonteParaBloco(idx){
+    let fontSize = Math.min(FONTE_MAX, Math.max(15, window.innerWidth*0.05));
+    letterText.style.fontSize = fontSize + 'px';
+    letterText.innerHTML = flatTexts[idx].replace(/\n/g,'<br><br>');
+
+    const alturaDisponivel = letterWrap.clientHeight - 40; // margem de segurança
+    let tentativas = 0;
+    while(letterText.scrollHeight > alturaDisponivel && fontSize > FONTE_MIN && tentativas < 60){
+      fontSize -= 0.5;
+      letterText.style.fontSize = fontSize + 'px';
+      tentativas++;
+    }
+  }
 
   function render(){
     const texto = flatTexts[blockIndex].slice(0, revealCount).replace(/\n/g,'<br><br>');
@@ -382,23 +403,11 @@
     nextDelay = base;
   }
 
-  function limparTimers(){
-    clearTimeout(waitTimer); waitTimer = null;
-    clearTimeout(fadeTimer); fadeTimer = null;
-  }
+  let waitAcc = 0;   // tempo (ms) acumulado no estado 'waiting' (pode ser pausado)
+  let fadeAcc = 0;   // tempo (ms) acumulado no estado 'fading' (pode ser pausado)
+  let pausado = false; // true quando o dedo está no MEIO da tela (travar a escrita)
 
-  function iniciarEsperaEDesaparecer(){
-    mode = 'waiting';
-    waitTimer = setTimeout(()=>{
-      letterText.classList.add('hide');
-      fadeTimer = setTimeout(()=>{
-        blockIndex++;
-        revealCount = 0;
-        letterText.classList.remove('hide');
-        mode = 'typing';
-      }, 600);
-    }, DURACAO_EXIBICAO);
-  }
+  const DURACAO_FADE = 600; // ms do fade suave entre blocos
 
   function mostrarDicaReiniciar(){
     restartTimer = setTimeout(()=>{
@@ -415,12 +424,15 @@
 
     if(holdDir === 1){
       // segurando lado direito: avança rápido
+      letterText.classList.remove('hide');
       revealCount = Math.min(revealCount + AVANCO_RAPIDO, fullLenAtual());
       render();
       if(revealCount >= fullLenAtual()){
         if(blockIndex < flatTexts.length-1){
           blockIndex++;
           revealCount = 0;
+          mode = 'typing';
+          ajustarFonteParaBloco(blockIndex);
         } else {
           mode = 'finished';
           if(!restartTimer) mostrarDicaReiniciar();
@@ -428,15 +440,21 @@
       }
     } else if(holdDir === -1){
       // segurando lado esquerdo: volta
+      letterText.classList.remove('hide');
       revealCount = Math.max(revealCount - AVANCO_RAPIDO, 0);
       render();
       if(revealCount <= 0 && blockIndex > 0){
         blockIndex--;
+        ajustarFonteParaBloco(blockIndex);
         revealCount = fullLenAtual();
         render();
       }
       restartHint.classList.remove('visible');
       mode = 'typing';
+    } else if(pausado){
+      // segurando o MEIO da tela: trava a escrita exatamente onde está.
+      // Não avançamos nenhum acumulador (acc/waitAcc/fadeAcc), então ao
+      // soltar o dedo tudo retoma do ponto exato em que parou.
     } else {
       // sem toque: comportamento automático
       if(mode === 'typing'){
@@ -449,12 +467,29 @@
           render();
           if(revealCount >= fullLenAtual()){
             if(blockIndex < flatTexts.length-1){
-              iniciarEsperaEDesaparecer();
+              mode = 'waiting';
+              waitAcc = 0;
             } else {
               mode = 'finished';
               mostrarDicaReiniciar();
             }
           }
+        }
+      } else if(mode === 'waiting'){
+        waitAcc += dt;
+        if(waitAcc >= DURACAO_EXIBICAO){
+          mode = 'fading';
+          fadeAcc = 0;
+          letterText.classList.add('hide');
+        }
+      } else if(mode === 'fading'){
+        fadeAcc += dt;
+        if(fadeAcc >= DURACAO_FADE){
+          blockIndex++;
+          revealCount = 0;
+          ajustarFonteParaBloco(blockIndex);
+          letterText.classList.remove('hide');
+          mode = 'typing';
         }
       }
     }
@@ -463,8 +498,15 @@
   }
 
   // ---------- Controle de toque ----------
-  function ladoDoToque(clientX){
-    return clientX < window.innerWidth/2 ? -1 : 1;
+  // Tela dividida em 3 zonas: esquerda (voltar), meio (pausar), direita (avançar)
+  const ZONA_ESQUERDA = 0.33;
+  const ZONA_DIREITA  = 0.67;
+
+  function zonaDoToque(clientX){
+    const w = window.innerWidth;
+    if(clientX < w*ZONA_ESQUERDA) return 'esquerda';
+    if(clientX > w*ZONA_DIREITA) return 'direita';
+    return 'meio';
   }
 
   function onPointerDown(e){
@@ -480,14 +522,20 @@
       return;
     }
 
-    limparTimers();
-    letterText.classList.remove('hide');
-    mode = 'typing';
-    holdDir = ladoDoToque(x);
+    const zona = zonaDoToque(x);
+    if(zona === 'meio'){
+      pausado = true;
+      holdDir = 0;
+      return;
+    }
+
+    pausado = false;
+    holdDir = (zona === 'esquerda') ? -1 : 1;
   }
 
   function onPointerUp(){
     holdDir = 0;
+    pausado = false;
   }
 
   touchLayer.addEventListener('pointerdown', onPointerDown);
@@ -499,14 +547,17 @@
 
   // ---------- Início / Reinício ----------
   function reiniciarExperiencia(){
-    limparTimers();
     clearTimeout(restartTimer); restartTimer = null;
     restartHint.classList.remove('visible');
     blockIndex = 0;
     revealCount = 0;
     acc = 0;
+    waitAcc = 0;
+    fadeAcc = 0;
     holdDir = 0;
+    pausado = false;
     mode = 'typing';
+    ajustarFonteParaBloco(blockIndex);
     letterText.classList.remove('hide');
     letterText.innerHTML = '';
     try{
@@ -514,6 +565,14 @@
       bgMusic.play().catch(()=>{});
     }catch(err){}
   }
+
+  // Reajusta a fonte do bloco atual se o usuário girar a tela ou redimensionar a janela
+  window.addEventListener('resize', function(){
+    if(started){
+      ajustarFonteParaBloco(blockIndex);
+      render();
+    }
+  });
 
   function iniciarExperiencia(){
     if(started) return;
